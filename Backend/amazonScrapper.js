@@ -127,97 +127,189 @@ const get_product_review_links = async (browser, product_links) => {
   return product_review_links;
 };
 
+// Old get_reviews() function
+// const get_reviews = async (browser, product_review_links, product_details) => {
+//   let reviews = [];
+
+//   for (let j = 0; j < 10; j++) {
+//     let url = product_review_links[j];
+
+//     // console.log("j = ", j);
+//     // console.log("url = ", url);
+
+//     let curr = {};
+//     let i = 0;
+//     let isEmpty = false;
+//     let temp = "abc";
+
+//     const page = await browser.newPage();
+
+//     while (i < 3) {
+//       await page.goto(url, { timeout: 0 });
+//       await page.screenshot({ path: `page${i}.jpg`, fullPage: true });
+
+//       const bookData = await page.evaluate((url) => {
+//         const reviewsHTML = Array.from(
+//           document.querySelectorAll(".review-text-content")
+//         );
+
+//         let review_count = document.querySelector(
+//           "#filter-info-section > div"
+//         ).innerText;
+
+//         review_count = review_count.split(",");
+//         review_count = review_count[1].split(" ");
+//         review_count = parseInt(review_count[1]);
+
+//         if (review_count < 50) {
+//           return null;
+//         }
+
+//         const reviews = reviewsHTML.map((review) => ({
+//           review:
+//             review.querySelector("span") == null
+//               ? "null"
+//               : review.querySelector("span").innerHTML,
+//         }));
+
+//         let nextUrl = "https://www.amazon.in";
+
+//         nextUrl +=
+//           document.querySelector(".a-last a") == null
+//             ? "/null"
+//             : document.querySelector(".a-last a").getAttribute("href");
+
+//         const data = {
+//           title: document.querySelector(".product-title h1 a").innerText + ",",
+//           nextUrl: nextUrl,
+//           reviews: reviews,
+//         };
+
+//         return data;
+//       }, url);
+
+//       // console.log("bookData = ", bookData);
+
+//       if (bookData == null) {
+//         // console.log("Reviews less than 50");
+//         isEmpty = true;
+//         break;
+//       }
+
+//       if (i == 0) {
+//         curr = bookData;
+//       } else {
+//         let prev_rev = curr.reviews;
+//         let updated_reviews = prev_rev.concat(bookData.reviews);
+
+//         curr.reviews = updated_reviews;
+//       }
+
+//       url = bookData.nextUrl;
+
+//       if (url == "https://www.amazon.in/null") break;
+
+//       i++;
+//     }
+
+//     if (isEmpty === false) {
+//       curr["price"] = product_details.prices[j].price;
+//       curr["link"] = "https://www.amazon.in" + product_details.links[j].link;
+//       curr["image_url"] = product_details.images_url[j].image_url;
+//       reviews.push(curr);
+//     }
+//   }
+
+//   return reviews;
+// };
+
+// New get_reviews() function
+import pLimit from "p-limit";
 const get_reviews = async (browser, product_review_links, product_details) => {
+  const limit = pLimit(5); // Set a limit for concurrent requests
   let reviews = [];
 
-  for (let j = 0; j < 10; j++) {
-    let url = product_review_links[j];
-
-    // console.log("j = ", j);
-    // console.log("url = ", url);
-
+  const fetchReviews = async (url, index) => {
     let curr = {};
     let i = 0;
-    let isEmpty = false;
-    let temp = "abc";
 
     const page = await browser.newPage();
 
     while (i < 3) {
-      await page.goto(url, { timeout: 0 });
-      await page.screenshot({ path: `page${i}.jpg`, fullPage: true });
+      try {
+        await page.goto(url, { timeout: 0 });
 
-      const bookData = await page.evaluate((url) => {
-        const reviewsHTML = Array.from(
-          document.querySelectorAll(".review-text-content")
-        );
+        const bookData = await page.evaluate(() => {
+          const reviewsHTML = Array.from(
+            document.querySelectorAll(".review-text-content")
+          );
 
-        let review_count = document.querySelector(
-          "#filter-info-section > div"
-        ).innerText;
+          const reviewCountElement = document.querySelector(
+            "#filter-info-section > div"
+          );
 
-        review_count = review_count.split(",");
-        review_count = review_count[1].split(" ");
-        review_count = parseInt(review_count[1]);
+          // Check if review count element exists
+          let reviewCount = reviewCountElement
+            ? reviewCountElement.innerText
+            : "0 reviews";
+          reviewCount = reviewCount.split(",")[1]?.split(" ")[1] || "0";
 
-        if (review_count < 50) {
-          return null;
+          if (parseInt(reviewCount) < 50) {
+            return null; // Skip if less than 50 reviews
+          }
+
+          const reviews = reviewsHTML.map((review) => ({
+            review: review.querySelector("span")?.innerHTML || "null",
+          }));
+
+          const nextUrl = document
+            .querySelector(".a-last a")
+            ?.getAttribute("href");
+
+          return {
+            title:
+              document.querySelector(".product-title h1 a").innerText + ",",
+            nextUrl: nextUrl ? `https://www.amazon.in${nextUrl}` : null,
+            reviews,
+          };
+        });
+
+        if (!bookData) {
+          break; // No valid book data, exit the loop
         }
 
-        const reviews = reviewsHTML.map((review) => ({
-          review:
-            review.querySelector("span") == null
-              ? "null"
-              : review.querySelector("span").innerHTML,
-        }));
+        if (i === 0) {
+          curr = bookData; // Initialize curr on first iteration
+        } else {
+          curr.reviews.push(...bookData.reviews); // Aggregate reviews
+        }
 
-        let nextUrl = "https://www.amazon.in";
+        url = bookData.nextUrl;
+        if (!url) break; // Exit if no next URL
 
-        nextUrl +=
-          document.querySelector(".a-last a") == null
-            ? "/null"
-            : document.querySelector(".a-last a").getAttribute("href");
-
-        const data = {
-          title: document.querySelector(".product-title h1 a").innerText + ",",
-          nextUrl: nextUrl,
-          reviews: reviews,
-        };
-
-        return data;
-      }, url);
-
-      // console.log("bookData = ", bookData);
-
-      if (bookData == null) {
-        // console.log("Reviews less than 50");
-        isEmpty = true;
+        i++;
+      } catch (error) {
+        console.error(`Error fetching reviews for ${url}: ${error.message}`);
         break;
       }
-
-      if (i == 0) {
-        curr = bookData;
-      } else {
-        let prev_rev = curr.reviews;
-        let updated_reviews = prev_rev.concat(bookData.reviews);
-
-        curr.reviews = updated_reviews;
-      }
-
-      url = bookData.nextUrl;
-
-      if (url == "https://www.amazon.in/null") break;
-
-      i++;
     }
 
-    if (isEmpty === false) {
-      curr["price"] = product_details.prices[j].price;
-      curr["link"] = "https://www.amazon.in" + product_details.links[j].link;
-      curr["image_url"] = product_details.images_url[j].image_url;
-      reviews.push(curr);
+    if (curr.reviews && curr.reviews.length > 0) {
+      curr["price"] = product_details.prices[index].price;
+      curr["link"] =
+        "https://www.amazon.in" + product_details.links[index].link;
+      curr["image_url"] = product_details.images_url[index].image_url;
+      return curr; // Return valid data
     }
-  }
+    return null; // Return null if no valid reviews
+  };
+
+  const reviewPromises = product_review_links.map((link, index) =>
+    limit(() => fetchReviews(link, index))
+  );
+
+  const results = await Promise.all(reviewPromises);
+  reviews = results.filter((review) => review !== null); // Filter out any null results
 
   return reviews;
 };
